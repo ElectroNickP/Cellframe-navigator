@@ -83,13 +83,27 @@ A comprehensive Telegram bot and watcher service that provides real-time transac
 
 ## 🚀 Quick Start
 
-See **[SETUP.md](SETUP.md)** for detailed installation instructions.
+### Minimal Mode (Bot Only) ⚡
+
+**Just want to try the bot? Start with only Telegram token:**
+
+See **[MINIMAL_MODE.md](MINIMAL_MODE.md)** for bot-only setup (no blockchain monitoring).
+
+```bash
+cp env.minimal.example .env
+# Edit .env: add your TELEGRAM_BOT_TOKEN
+docker-compose -f docker-compose.minimal.yml up
+```
+
+### Full Mode (With Blockchain Monitoring)
+
+See **[SETUP.md](SETUP.md)** for complete installation with blockchain monitoring.
 
 ### Prerequisites
 
 - Docker and Docker Compose
 - Telegram Bot Token ([Get from BotFather](https://t.me/BotFather))
-- RPC endpoints (Ethereum, BSC, Cellframe node)
+- RPC endpoints (Ethereum, BSC, Cellframe node) - *optional for minimal mode*
 
 ### Installation
 
