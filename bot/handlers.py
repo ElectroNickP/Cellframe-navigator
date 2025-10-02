@@ -76,16 +76,26 @@ def register_handlers(dp: Router) -> None:
             "/track <tx_hash> - Track transaction in real-time 🔥\n"
             "/status [tx_hash] - Check transaction status\n"
             "/mysessions - View your bridge sessions\n"
+            "/stats - View your statistics 📊\n"
             "/fees - View current bridge fees\n"
+            "/faq - Frequently Asked Questions 💡\n"
             "/bind - Link your blockchain addresses\n"
             "/help - Show this message\n\n"
             "<b>Supported Networks:</b>\n"
             "• Ethereum (ERC-20)\n"
             "• BSC (BEP-20)\n"
             "• Cellframe (CF-20)\n\n"
+            "<b>Example TX Hashes:</b>\n"
+            "• Ethereum: <code>0x1234...abcd</code> (66 chars)\n"
+            "• BSC: <code>0x5678...ef90</code> (66 chars)\n"
+            "• Cellframe: Various length, base58\n\n"
+            "🔍 <b>Block Explorers:</b>\n"
+            "• <a href='https://etherscan.io'>Etherscan</a> - Ethereum\n"
+            "• <a href='https://bscscan.com'>BscScan</a> - BSC\n"
+            "• <a href='https://cfscan.io'>CFScan</a> - Cellframe\n\n"
             "<i>Note: Always double-check addresses before bridging!</i>"
         )
-        await message.answer(help_text)
+        await message.answer(help_text, disable_web_page_preview=True)
 
     @router.message(Command("bridge"))
     async def cmd_bridge(message: types.Message, state: FSMContext) -> None:
@@ -130,6 +140,115 @@ def register_handlers(dp: Router) -> None:
             "Use /bridge to get real-time estimates.</i>"
         )
         await message.answer(fees_text)
+
+    @router.message(Command("faq"))
+    async def cmd_faq(message: types.Message) -> None:
+        """Show frequently asked questions."""
+        faq_text = (
+            "💡 <b>Frequently Asked Questions</b>\n\n"
+            
+            "<b>Q: Почему мою транзакцию не находит бот?</b>\n"
+            "A: Возможные причины:\n"
+            "• TX очень свежая (подождите 1-2 минуты)\n"
+            "• Неправильная сеть (проверьте в explorer)\n"
+            "• Опечатка в hash (скопируйте из wallet)\n\n"
+            
+            "<b>Q: Сколько ждать подтверждения?</b>\n"
+            "A: Зависит от сети:\n"
+            "• Ethereum: ~3 минуты (12 блоков)\n"
+            "• BSC: ~45 секунд (15 блоков)\n"
+            "• Cellframe: ~30 секунд (3 блока)\n\n"
+            
+            "<b>Q: Как узнать когда TX подтверждена?</b>\n"
+            "A: Бот отправит уведомление автоматически!\n"
+            "• Прогресс каждые 30 секунд\n"
+            "• Финальное уведомление при подтверждении\n\n"
+            
+            "<b>Q: Можно отслеживать несколько TX?</b>\n"
+            "A: Да! Используйте:\n"
+            "• /track для каждой новой TX\n"
+            "• /mysessions для списка всех\n"
+            "• /stats для статистики\n\n"
+            
+            "<b>Q: TX уже подтверждена, зачем отслеживать?</b>\n"
+            "A: Можно проверить статус:\n"
+            "• Сколько подтверждений\n"
+            "• В каком блоке\n"
+            "• Ссылка на explorer\n\n"
+            
+            "<b>Q: Что значит \"TX not found\"?</b>\n"
+            "A: TX не найдена ни в одной сети.\n"
+            "Попробуйте:\n"
+            "• Подождать 1-2 минуты и повторить\n"
+            "• Проверить hash в block explorer\n"
+            "• Убедиться что TX подтверждена\n\n"
+            
+            "<b>Q: Бот медленно отвечает</b>\n"
+            "A: Возможные причины:\n"
+            "• RPC node перегружена (повторите)\n"
+            "• Сетевые проблемы (проверьте интернет)\n"
+            "• Обычно ответ приходит за 2-5 секунд\n\n"
+            
+            "❓ <b>Не нашли ответ?</b>\n"
+            "Отправьте /help для списка команд\n"
+            "или проверьте <a href='https://docs.cellframe.net'>документацию</a>"
+        )
+        await message.answer(faq_text, disable_web_page_preview=True)
+
+    @router.message(Command("stats"))
+    async def cmd_stats(message: types.Message) -> None:
+        """Show user statistics."""
+        async with SessionFactory() as db_session:
+            user_repo = UserRepository(db_session)
+            user = await user_repo.get_or_create(
+                telegram_id=message.from_user.id,
+                username=message.from_user.username,
+            )
+
+            # Get statistics
+            session_repo = BridgeSessionRepository(db_session)
+            tx_repo = TransactionRepository(db_session)
+
+            sessions = await session_repo.list_by_user(user.id, limit=1000)
+            
+            # Count by status
+            total_sessions = len(sessions)
+            active_sessions = sum(1 for s in sessions if s.status in ["pending", "processing"])
+            completed_sessions = sum(1 for s in sessions if s.status == "completed")
+            
+            # Get pending transactions count
+            pending_txs = await tx_repo.list_pending(limit=1000)
+            user_pending = sum(1 for tx in pending_txs if any(s.id == tx.session_id for s in sessions))
+
+            # Calculate success rate
+            if total_sessions > 0:
+                success_rate = (completed_sessions / total_sessions) * 100
+            else:
+                success_rate = 0
+
+            stats_text = (
+                f"📊 <b>Ваша статистика</b>\n\n"
+                f"👤 <b>Пользователь:</b> {message.from_user.full_name}\n"
+                f"🆔 <b>ID:</b> <code>{message.from_user.id}</code>\n\n"
+                
+                f"<b>🌉 Bridge Sessions:</b>\n"
+                f"• Всего: {total_sessions}\n"
+                f"• Активных: {active_sessions} ⏳\n"
+                f"• Завершенных: {completed_sessions} ✅\n"
+                f"• Success Rate: {success_rate:.1f}%\n\n"
+                
+                f"<b>📦 Транзакции:</b>\n"
+                f"• Отслеживаемых: {user_pending} ⏳\n\n"
+                
+                f"<b>🔥 Быстрые команды:</b>\n"
+                f"/mysessions - Все ваши сессии\n"
+                f"/track - Отследить новую TX\n"
+                f"/faq - Частые вопросы\n\n"
+                
+                f"<i>Спасибо что пользуетесь Cellframe Bridge! 🚀</i>"
+            )
+            
+            await message.answer(stats_text)
 
     @router.message(Command("bind"))
     async def cmd_bind(message: types.Message, state: FSMContext) -> None:
@@ -324,12 +443,16 @@ def register_handlers(dp: Router) -> None:
                 await message.answer(
                     "❌ <b>Transaction not found</b>\n\n"
                     f"TX Hash: <code>{tx_hash[:20]}...{tx_hash[-10:]}</code>\n\n"
-                    "This transaction was not found on Ethereum, BSC, or Cellframe.\n"
-                    "Please check:\n"
-                    "• TX hash is correct\n"
-                    "• Transaction has been broadcasted\n"
-                    "• Using the right network\n"
-                    "• RPC endpoint is configured and working"
+                    "This transaction was not found on Ethereum, BSC, or Cellframe.\n\n"
+                    "<b>💡 Что делать?</b>\n"
+                    "• Проверьте TX hash (скопируйте заново из wallet)\n"
+                    "• Подождите 1-2 минуты и попробуйте снова\n"
+                    "• Убедитесь что TX подтверждена в сети\n"
+                    "• Проверьте TX в block explorer:\n"
+                    "  - <a href='https://etherscan.io'>Etherscan</a> (Ethereum)\n"
+                    "  - <a href='https://bscscan.com'>BscScan</a> (BSC)\n"
+                    "  - <a href='https://cfscan.io'>CFScan</a> (Cellframe)\n\n"
+                    "❓ Если проблема сохраняется - /faq"
                 )
                 return
             
@@ -451,8 +574,16 @@ def register_handlers(dp: Router) -> None:
             logger.error(f"Error tracking transaction: {e}", exc_info=True)
             await message.answer(
                 "❌ <b>Error tracking transaction</b>\n\n"
-                "An error occurred while checking the transaction.\n"
-                f"Error: {str(e)}"
+                "An error occurred while checking the transaction.\n\n"
+                "<b>💡 Возможные причины:</b>\n"
+                "• RPC node временно недоступна\n"
+                "• Сетевые проблемы\n"
+                "• Неверный формат TX hash\n\n"
+                "<b>Что делать:</b>\n"
+                "• Попробуйте через 1-2 минуты\n"
+                "• Проверьте TX в block explorer\n"
+                "• Отправьте /faq для помощи\n\n"
+                f"<i>Техническая ошибка: {str(e)[:100]}</i>"
             )
 
     @router.message(Command("cancel"))
