@@ -1,53 +1,119 @@
 version: "3.9"
 
 services:
-  bot:
-    build: .
-    command: python -m bot.main
-    env_file:
-      - .env
-    depends_on:
-      - db
-      - redis
-    volumes:
-      - ./:/app
-
-  watcher:
-    build: .
-    command: python -m watcher.main
-    env_file:
-      - .env
-    depends_on:
-      - db
-      - redis
-    volumes:
-      - ./:/app
-
-  worker:
-    build: .
-    command: python -m queue.worker
-    env_file:
-      - .env
-    depends_on:
-      - redis
-    volumes:
-      - ./:/app
-
+  # PostgreSQL Database
   db:
     image: postgres:15-alpine
+    container_name: cellframe_db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: cellframe
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cellframe_network
 
+  # Redis Cache and Queue
   redis:
     image: redis:7-alpine
+    container_name: cellframe_redis
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cellframe_network
+
+  # Database Migration Service
+  migration:
+    build: .
+    container_name: cellframe_migration
+    command: python -m alembic upgrade head
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    networks:
+      - cellframe_network
+    restart: "no"
+
+  # Telegram Bot Service
+  bot:
+    build: .
+    container_name: cellframe_bot
+    command: python -m bot.main
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    networks:
+      - cellframe_network
+
+  # Blockchain Watcher Service
+  watcher:
+    build: .
+    container_name: cellframe_watcher
+    command: python -m watcher.main
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    networks:
+      - cellframe_network
+
+  # Queue Worker Service
+  worker:
+    build: .
+    container_name: cellframe_worker
+    command: python -m queue.worker
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    networks:
+      - cellframe_network
+
+networks:
+  cellframe_network:
+    driver: bridge
 
 volumes:
   postgres_data:

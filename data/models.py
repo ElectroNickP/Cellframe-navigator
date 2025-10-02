@@ -45,7 +45,13 @@ class BridgeSession(Base):
     direction: Mapped[str] = mapped_column(String(64))
     token: Mapped[str] = mapped_column(String(32))
     amount: Mapped[str] = mapped_column(String(64))
+    src_address: Mapped[Optional[str]] = mapped_column(String(255))
+    dst_address: Mapped[Optional[str]] = mapped_column(String(255))
+    src_network: Mapped[Optional[str]] = mapped_column(String(32))
+    dst_network: Mapped[Optional[str]] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(32), default="pending")
+    estimated_fee: Mapped[Optional[str]] = mapped_column(String(64))
+    estimated_time_seconds: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -62,10 +68,16 @@ class Transaction(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("bridge_sessions.id", ondelete="CASCADE"))
     chain: Mapped[str] = mapped_column(String(32))
     hash: Mapped[str] = mapped_column(String(128), index=True)
+    block_number: Mapped[Optional[int]] = mapped_column(Integer)
+    confirmations: Mapped[int] = mapped_column(Integer, default=0)
+    confirmations_required: Mapped[int] = mapped_column(Integer, default=12)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     amount: Mapped[Optional[str]] = mapped_column(String(64))
     fee: Mapped[Optional[str]] = mapped_column(String(64))
+    from_address: Mapped[Optional[str]] = mapped_column(String(255))
+    to_address: Mapped[Optional[str]] = mapped_column(String(255))
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

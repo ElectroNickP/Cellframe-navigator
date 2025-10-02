@@ -1,110 +1,228 @@
-# Cellframe Navigator
+# Cellframe Bridge Navigator
 
-Cellframe Navigator is a reference implementation of a Telegram bot and watcher service
-that orchestrate cross-chain bridge monitoring for the Cellframe ecosystem. The
-project is split into multiple services that communicate via Redis queues and a
-shared PostgreSQL database.
+**Professional bridge monitoring system** for cross-chain transactions between Ethereum, BSC, and Cellframe networks.
 
-## Architecture Overview
+A comprehensive Telegram bot and watcher service that provides real-time transaction tracking, fee estimation, and smart diagnostics for Cellframe ecosystem bridge operations.
+
+## 🎯 Key Features
+
+### For Users
+- ✅ **Intuitive Bridge Interface** - Step-by-step guidance through bridge creation
+- ✅ **Address Validation** - Real-time validation for ERC-20/BEP-20/CF-20 addresses
+- ✅ **Fee Estimation** - Accurate fee calculations and time estimates
+- ✅ **Transaction Tracking** - Monitor confirmations on both source and destination chains
+- ✅ **Multi-Chain Support** - Ethereum, BSC, and Cellframe CF-20
+- ✅ **Session Management** - Track multiple bridge sessions simultaneously
+
+### For Developers
+- ✅ **Production-Ready Architecture** - Microservices with health checks and graceful shutdown
+- ✅ **Database Migrations** - Alembic for schema versioning
+- ✅ **Real Blockchain Integration** - Live CF-20 RPC client with TX_HISTORY, MEMPOOL, TOKEN_INFO
+- ✅ **EVM Transaction Tracker** - Confirmation counting for Ethereum and BSC
+- ✅ **Queue System** - Redis RQ for reliable event processing
+- ✅ **Docker Compose** - Full stack orchestration
+
+## 🏗️ Architecture
 
 ```
-Telegram Bot (aiogram) <---> Redis (RQ queues) <---> Watcher (chain pollers)
-            |                                   \
-            |                                    --> PostgreSQL (SQLAlchemy models)
-            \---> Users receive alerts based on bridge sessions and transactions
+┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+│   Telegram   │────────►│  Bot Service │────────►│  PostgreSQL  │
+│    Users     │         │   (aiogram)  │         │   Database   │
+└──────────────┘         └───────┬──────┘         └──────────────┘
+                                 │
+                                 ▼
+                         ┌──────────────┐
+                         │    Redis     │
+                         │ Queue/Cache  │
+                         └───────┬──────┘
+                                 │
+                ┌────────────────┼────────────────┐
+                ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │  ETH Watcher │ │  BSC Watcher │ │ CF-20 Watcher│
+        └───────┬──────┘ └───────┬──────┘ └───────┬──────┘
+                │                │                │
+                ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │ Ethereum RPC │ │   BSC RPC    │ │ Cellframe    │
+        │   + Scan     │ │   + Scan     │ │ Node RPC     │
+        └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
-### Components
+## 📦 Components
 
-- **`bot/`** – Telegram bot with handlers for `/bridge`, `/status`, `/fees`, `/bind`,
-  and `/help`. The bot guides the user through bridge direction and token selection,
-  stores bindings, and listens for notifications coming from the watcher through
-  Redis queues.
-- **`watcher/`** – Blockchain polling service with dedicated modules for Ethereum,
-  Binance Smart Chain, and Cellframe CF-20. Each watcher polls RPC endpoints and
-  enqueues events for further processing.
-- **`data/`** – Data access layer powered by SQLAlchemy with models for `user`,
-  `wallet_binding`, `bridge_session`, `tx`, and `alert` entities.
-- **`queue/`** – RQ queue tasks and worker to process watcher events, retry failed
-  jobs, and dispatch bot notifications.
+### `bot/` - Telegram Bot
+- **Modern UX** with inline keyboards and step-by-step flows
+- **Command handlers**: `/bridge`, `/status`, `/fees`, `/bind`, `/mysessions`
+- **FSM-based flows** for bridge creation and address binding
+- **Address validation** before submission
 
-## Getting Started
+### `watcher/` - Blockchain Monitoring
+- **CF-20 RPC Client** - Full JSON-RPC integration (TX_HISTORY, MEMPOOL, TOKEN_INFO)
+- **Ethereum Watcher** - CELL ERC-20 token tracking with confirmation counting
+- **BSC Watcher** - CELL BEP-20 token tracking with confirmation counting
+- **Fee Estimator** - Real-time gas price and transaction cost estimation
+- **Address Validators** - Format validation for all supported chains
+
+### `data/` - Data Layer
+- **SQLAlchemy 2.0** models with typed relationships
+- **Alembic migrations** for schema versioning
+- **AsyncPG** for high-performance database access
+- **Models**: User, WalletBinding, BridgeSession, Transaction, Alert
+
+### `queue/` - Event Processing
+- **Redis RQ** for reliable job processing
+- **Retry mechanism** for failed jobs
+- **Event processing pipeline** for blockchain events
+
+## 🚀 Quick Start
+
+See **[SETUP.md](SETUP.md)** for detailed installation instructions.
 
 ### Prerequisites
 
 - Docker and Docker Compose
-- Telegram bot token (obtain from [BotFather](https://t.me/BotFather))
-- RPC credentials for Ethereum/BSC/Cellframe (optional for local testing)
+- Telegram Bot Token ([Get from BotFather](https://t.me/BotFather))
+- RPC endpoints (Ethereum, BSC, Cellframe node)
 
-### Environment Variables
+### Installation
 
-Copy the example environment file and adjust values as needed:
-
+1. **Clone repository**
 ```bash
-cp .env.example .env
+git clone <repository-url>
+cd Cellframe-navigator
 ```
 
-Required variables:
+2. **Configure environment**
+```bash
+cp env.example .env
+# Edit .env with your credentials
+```
 
-- `TELEGRAM_BOT_TOKEN` – Telegram bot token
-- `DATABASE_URL` – SQLAlchemy connection string (defaults to Postgres in docker-compose)
-- `REDIS_URL` – Redis connection URL
-- `ETH_RPC_URL` / `ETHERSCAN_API_KEY` – Ethereum RPC and optional explorer API key
-- `BSC_RPC_URL` / `BSCSCAN_API_KEY` – BSC RPC and optional explorer API key
-- `CF_RPC_URL` – Cellframe node RPC endpoint
-
-### Running with Docker Compose
-
-Launch the full stack (bot, watcher, worker, Postgres, Redis):
-
+3. **Launch services**
 ```bash
 docker-compose up --build
 ```
 
-The bot will start polling Telegram updates while the watcher continuously polls
-blockchains and enqueues new events for processing.
+Services will start in this order:
+1. PostgreSQL & Redis (with health checks)
+2. Database migrations
+3. Bot, Watcher, and Worker services
 
-### Local Development
+### Environment Variables
 
-1. Install dependencies:
+**Required:**
+- `TELEGRAM_BOT_TOKEN` - Your Telegram bot token
+- `CF_RPC_URL` - Cellframe node RPC endpoint (e.g., `http://node:8079`)
+- `CF_NETWORK` - Cellframe network (`backbone` or `kelvpn`)
 
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install -e .
-   ```
+**Recommended:**
+- `ETH_RPC_URL` - Ethereum RPC (Infura/Alchemy)
+- `ETHERSCAN_API_KEY` - For transaction verification
+- `BSC_RPC_URL` - BSC RPC endpoint
+- `BSCSCAN_API_KEY` - For BSC verification
 
-2. Create a Postgres database and run migrations (Alembic not included in this
-   skeleton, models are provided for reference).
+See `env.example` for all configuration options.
 
-3. Start Redis and Postgres services locally or via Docker Compose.
+## 🎮 Bot Commands
 
-4. Run individual services:
+| Command | Description |
+|---------|-------------|
+| `/start`, `/help` | Show welcome message and available commands |
+| `/bridge` | Start new bridge session with step-by-step guidance |
+| `/status [tx_hash]` | Check transaction status or view your sessions |
+| `/fees` | View current bridge fees and time estimates |
+| `/bind` | Bind blockchain addresses for quick access |
+| `/mysessions` | View all your bridge sessions |
+| `/cancel` | Cancel current operation |
 
-   ```bash
-   python -m bot.main
-   python -m watcher.main
-   python -m queue.worker
-   ```
+## 💻 Development
 
-### Retry Queue
+### Local Setup
 
-The project leverages Redis + RQ for processing events emitted by the watcher.
-Failed jobs can be retried automatically by RQ, ensuring that notifications are
-eventually delivered to bot users.
+```bash
+# Install dependencies
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
 
-## Project Structure
+# Start infrastructure
+docker-compose up db redis
+
+# Run migrations
+alembic upgrade head
+
+# Run services
+python -m bot.main      # Terminal 1
+python -m watcher.main  # Terminal 2
+python -m queue.worker  # Terminal 3
+```
+
+### Project Structure
 
 ```
-bot/            # Telegram bot implementation
-watcher/        # Chain polling services and schedulers
-data/           # SQLAlchemy models and session helpers
-queue/          # RQ tasks and worker
-Dockerfile
-docker-compose.yml
-pyproject.toml
+.
+├── alembic/              # Database migrations
+├── bot/                  # Telegram bot service
+│   ├── config.py         # Configuration
+│   ├── handlers.py       # Command handlers with FSM
+│   ├── keyboards.py      # Inline keyboards
+│   └── storage.py        # Session storage
+├── watcher/              # Blockchain monitoring
+│   ├── chains/           # Chain-specific watchers
+│   ├── cf20_rpc.py       # CF-20 JSON-RPC client
+│   ├── evm_tracker.py    # EVM confirmation tracker
+│   ├── validators.py     # Address validators
+│   └── fee_estimator.py  # Fee calculation
+├── data/                 # Data layer
+│   ├── database.py       # Database connection
+│   ├── models.py         # SQLAlchemy models
+│   └── repositories.py   # Data access layer
+├── queue/                # Queue processing
+└── docker-compose.yml    # Service orchestration
 ```
 
-## License
+## 🔧 Technical Stack
 
-MIT
+- **Python 3.11+** - Modern async/await patterns
+- **aiogram 3.0** - Telegram Bot framework
+- **SQLAlchemy 2.0** - ORM with async support
+- **PostgreSQL 15** - Relational database
+- **Redis 7** - Queue and cache
+- **Web3.py** - Ethereum/BSC interaction
+- **httpx** - Async HTTP client for CF-20 RPC
+- **Alembic** - Database migrations
+- **Docker** - Containerization
+
+## 📝 What's Next
+
+Coming soon:
+- [ ] Smart diagnostics in `/status` command
+- [ ] Push notifications for transaction updates
+- [ ] CFSCAN integration for public verification
+- [ ] Multi-language support (EN/RU/TH)
+- [ ] Web dashboard for support team
+- [ ] Transaction history export
+
+## 🔒 Security
+
+- ✅ Bot operates in **read-only mode** - no private keys required
+- ✅ Address validation before processing
+- ✅ Environment-based secrets management
+- ✅ No sensitive data in logs
+- ✅ Rate limiting ready
+- ✅ Whitelist support for authorized users
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions welcome! Please read the contribution guidelines first.
+
+## 📞 Support
+
+- Documentation: See [SETUP.md](SETUP.md)
+- Issues: GitHub Issues
+- Contact: dev@cellframe.net
