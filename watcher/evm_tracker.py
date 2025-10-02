@@ -45,7 +45,7 @@ class EVMTransactionTracker:
                 # Transaction is still pending
                 return 0
 
-            current_block = await asyncio.to_thread(self.web3.eth.block_number)
+            current_block = self.web3.eth.block_number
             confirmations = max(0, current_block - tx["blockNumber"] + 1)
             
             return confirmations

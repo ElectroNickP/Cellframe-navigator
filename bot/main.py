@@ -5,6 +5,7 @@ import logging
 from typing import Iterable
 
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand
@@ -27,7 +28,10 @@ async def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
 
     storage = RedisStorage.from_url(config.redis_url)
-    bot = Bot(token=config.token, parse_mode=ParseMode.HTML)
+    bot = Bot(
+        token=config.token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     dp = Dispatcher(storage=storage)
 
     register_handlers(dp)

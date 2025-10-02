@@ -22,7 +22,10 @@ from bot.keyboards import (
 )
 from bot.status_handler import StatusCommandHandler
 from bot.storage import BindingStorage
+from data.database import get_session_factory
+from data.repositories import BridgeSessionRepository, TransactionRepository, UserRepository
 from watcher.cfscan import CFSCANIntegration
+from watcher.evm_tracker import EVMTransactionTracker
 from watcher.validators import validate_address
 
 
@@ -31,6 +34,9 @@ logger = logging.getLogger(__name__)
 # Initialize services
 status_handler = StatusCommandHandler()
 cfscan = CFSCANIntegration()
+
+# Get database session factory
+SessionFactory = get_session_factory()
 
 
 class BridgeFlow(StatesGroup):
@@ -67,10 +73,11 @@ def register_handlers(dp: Router) -> None:
             "Ethereum, BSC, and Cellframe networks.\n\n"
             "<b>Available Commands:</b>\n"
             "/bridge - Start new bridge session\n"
+            "/track <tx_hash> - Track transaction in real-time 🔥\n"
             "/status [tx_hash] - Check transaction status\n"
+            "/mysessions - View your bridge sessions\n"
             "/fees - View current bridge fees\n"
             "/bind - Link your blockchain addresses\n"
-            "/mysessions - View your bridge sessions\n"
             "/help - Show this message\n\n"
             "<b>Supported Networks:</b>\n"
             "• Ethereum (ERC-20)\n"
@@ -145,32 +152,231 @@ def register_handlers(dp: Router) -> None:
     @router.message(Command("mysessions"))
     async def cmd_my_sessions(message: types.Message) -> None:
         """Show user's bridge sessions."""
-        sessions = binding_storage.list_sessions(message.from_user.id)
-        
-        if not sessions:
+        try:
+            async with SessionFactory() as db_session:
+                user_repo = UserRepository(db_session)
+                user = await user_repo.get_or_create(
+                    telegram_id=message.from_user.id,
+                    username=message.from_user.username,
+                )
+                
+                session_repo = BridgeSessionRepository(db_session)
+                sessions = await session_repo.list_by_user(user.id, limit=10)
+                
+                if not sessions:
+                    await message.answer(
+                        "You don't have any bridge sessions yet.\n"
+                        "Use /bridge to create one!"
+                    )
+                    return
+
+                response = "📚 <b>Your Bridge Sessions</b>\n\n"
+                for idx, session in enumerate(sessions, 1):
+                    status_emoji = {
+                        "pending": "⏳",
+                        "processing": "🔄",
+                        "completed": "✅",
+                        "failed": "❌",
+                    }.get(session.status, "❓")
+                    
+                    direction_display = session.direction.replace('_to_', ' → ').replace('_', ' ').title()
+                    
+                    response += (
+                        f"{idx}. {status_emoji} <b>{session.token}</b> {session.amount}\n"
+                        f"   Direction: {direction_display}\n"
+                        f"   Status: {session.status}\n"
+                        f"   ID: <code>{session.session_id}</code>\n\n"
+                    )
+                
+                await message.answer(response)
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch sessions: {e}", exc_info=True)
             await message.answer(
-                "You don't have any bridge sessions yet.\n"
-                "Use /bridge to create one!"
+                "❌ Failed to fetch your sessions.\n"
+                "Please try again later."
+            )
+
+    @router.message(Command("track"))
+    async def cmd_track(message: types.Message) -> None:
+        """Track a transaction by hash."""
+        # Extract TX hash from message
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer(
+                "📍 <b>Track Transaction</b>\n\n"
+                "Send me a transaction hash to track:\n\n"
+                "<b>Usage:</b> <code>/track 0x123...</code>\n\n"
+                "<b>Supported:</b>\n"
+                "• Ethereum TX hash\n"
+                "• BSC TX hash\n"
+                "• Cellframe TX hash"
             )
             return
-
-        response = "📚 <b>Your Bridge Sessions</b>\n\n"
-        for idx, session in enumerate(sessions, 1):
-            status_emoji = {
-                "pending": "⏳",
-                "processing": "🔄",
-                "completed": "✅",
-                "failed": "❌",
-            }.get(session.status, "❓")
-            
-            response += (
-                f"{idx}. {status_emoji} <b>{session.token}</b> {session.amount}\n"
-                f"   Direction: {session.direction.replace('_to_', ' → ')}\n"
-                f"   Status: {session.status}\n"
-                f"   ID: <code>{session.session_id}</code>\n\n"
-            )
         
-        await message.answer(response)
+        tx_hash = parts[1].strip()
+        
+        # Validate TX hash format
+        if tx_hash.startswith("0x") and len(tx_hash) == 66:
+            # Ethereum/BSC format
+            chain = "ethereum"  # Will detect actual chain later
+        elif len(tx_hash) == 64 or len(tx_hash) == 66:
+            # Could be Cellframe or Ethereum without 0x
+            if not tx_hash.startswith("0x"):
+                tx_hash = "0x" + tx_hash
+            chain = "ethereum"
+        else:
+            await message.answer(
+                "❌ Invalid transaction hash format.\n\n"
+                "Please provide a valid TX hash:\n"
+                "• Ethereum: 0x1234... (66 chars)\n"
+                "• BSC: 0x1234... (66 chars)\n"
+                "• Cellframe: varies"
+            )
+            return
+        
+        await message.answer("🔍 Checking transaction...")
+        
+        try:
+            # Check if we have ETH RPC configured
+            eth_rpc = os.getenv("ETH_RPC_URL")
+            bsc_rpc = os.getenv("BSC_RPC_URL")
+            
+            if not eth_rpc and not bsc_rpc:
+                await message.answer(
+                    "⚠️ <b>RPC not configured</b>\n\n"
+                    "Transaction tracking requires blockchain RPC endpoints.\n"
+                    "Please configure ETH_RPC_URL or BSC_RPC_URL."
+                )
+                return
+            
+            # Try Ethereum first
+            tracker = None
+            tx_info = None
+            detected_chain = None
+            
+            if eth_rpc:
+                try:
+                    from web3 import Web3
+                    web3_eth = Web3(Web3.HTTPProvider(eth_rpc))
+                    tracker = EVMTransactionTracker(web3_eth, confirmations_required=12)
+                    tx_info = await tracker.get_transaction_status(tx_hash)
+                    if tx_info and tx_info.get("exists"):
+                        detected_chain = "ethereum"
+                except Exception as e:
+                    logger.debug(f"Not found on Ethereum: {e}")
+            
+            # Try BSC if not found on Ethereum
+            if not detected_chain and bsc_rpc:
+                try:
+                    from web3 import Web3
+                    web3_bsc = Web3(Web3.HTTPProvider(bsc_rpc))
+                    tracker = EVMTransactionTracker(web3_bsc, confirmations_required=15)
+                    tx_info = await tracker.get_transaction_status(tx_hash)
+                    if tx_info and tx_info.get("exists"):
+                        detected_chain = "bsc"
+                except Exception as e:
+                    logger.debug(f"Not found on BSC: {e}")
+            
+            if not detected_chain or not tx_info:
+                await message.answer(
+                    "❌ <b>Transaction not found</b>\n\n"
+                    f"TX Hash: <code>{tx_hash}</code>\n\n"
+                    "This transaction was not found on Ethereum or BSC.\n"
+                    "Please check:\n"
+                    "• TX hash is correct\n"
+                    "• Transaction has been broadcasted\n"
+                    "• Using the right network"
+                )
+                return
+            
+            # Save to database
+            async with SessionFactory() as db_session:
+                user_repo = UserRepository(db_session)
+                user = await user_repo.get_or_create(
+                    telegram_id=message.from_user.id,
+                    username=message.from_user.username,
+                )
+                
+                # Create or get session
+                session_repo = BridgeSessionRepository(db_session)
+                sessions = await session_repo.list_by_user(user.id, limit=1)
+                
+                if sessions:
+                    session = sessions[0]
+                else:
+                    # Create a tracking-only session
+                    session = await session_repo.create(
+                        user_id=user.id,
+                        direction=f"{detected_chain}_to_cf",
+                        token="CELL",
+                        amount=tx_info.get("amount", "0"),
+                        src_network=detected_chain.title(),
+                        dst_network="Cellframe CF-20",
+                    )
+                
+                # Add transaction
+                tx_repo = TransactionRepository(db_session)
+                existing_tx = await tx_repo.get_by_hash(tx_hash)
+                
+                if not existing_tx:
+                    tx = await tx_repo.create(
+                        session_id=session.id,
+                        chain=detected_chain,
+                        tx_hash=tx_hash,
+                        confirmations_required=12 if detected_chain == "ethereum" else 15,
+                        from_address=tx_info.get("from"),
+                        to_address=tx_info.get("to"),
+                    )
+                    
+                    # Update with current status
+                    await tx_repo.update_status(
+                        tx_hash=tx_hash,
+                        confirmations=tx_info.get("confirmations", 0),
+                        block_number=tx_info.get("block_number"),
+                        status="confirmed" if tx_info.get("confirmed") else "pending",
+                    )
+                    
+                    await db_session.commit()
+                    
+                    logger.info(f"Started tracking TX {tx_hash} for user {message.from_user.id}")
+                
+            # Display status
+            confirmations = tx_info.get("confirmations", 0)
+            required = 12 if detected_chain == "ethereum" else 15
+            confirmed = tx_info.get("confirmed", False)
+            
+            status_emoji = "✅" if confirmed else "⏳"
+            chain_name = "Ethereum" if detected_chain == "ethereum" else "BSC"
+            
+            status_text = (
+                f"{status_emoji} <b>Transaction Tracked!</b>\n\n"
+                f"<b>Chain:</b> {chain_name}\n"
+                f"<b>TX Hash:</b> <code>{tx_hash[:10]}...{tx_hash[-8:]}</code>\n"
+                f"<b>Status:</b> {'Confirmed ✅' if confirmed else 'Pending ⏳'}\n"
+                f"<b>Confirmations:</b> {confirmations}/{required}\n"
+            )
+            
+            if tx_info.get("block_number"):
+                status_text += f"<b>Block:</b> {tx_info['block_number']}\n"
+            
+            if not confirmed:
+                status_text += (
+                    f"\n⏱ <b>Estimated time:</b> ~{(required - confirmations) * 15} seconds\n\n"
+                    f"I'll notify you when this transaction is confirmed!"
+                )
+            else:
+                status_text += "\n✅ This transaction is already confirmed!"
+            
+            await message.answer(status_text)
+            
+        except Exception as e:
+            logger.error(f"Error tracking transaction: {e}", exc_info=True)
+            await message.answer(
+                "❌ <b>Error tracking transaction</b>\n\n"
+                "An error occurred while checking the transaction.\n"
+                f"Error: {str(e)}"
+            )
 
     @router.message(Command("cancel"))
     async def cmd_cancel(message: types.Message, state: FSMContext) -> None:
@@ -328,23 +534,55 @@ def register_handlers(dp: Router) -> None:
             await callback.answer()
             return
         
-        # Create session
+        # Get session data
         data = await state.get_data()
-        session = binding_storage.create_session(
-            user_id=callback.from_user.id,
-            direction=data.get("direction"),
-            token=data.get("token"),
-            amount=data.get("amount"),
-        )
+        direction = data.get("direction", "")
+        src, dst = parse_direction(direction)
+        
+        # Create session in database
+        try:
+            async with SessionFactory() as db_session:
+                # Get or create user
+                user_repo = UserRepository(db_session)
+                user = await user_repo.get_or_create(
+                    telegram_id=callback.from_user.id,
+                    username=callback.from_user.username,
+                )
+                
+                # Create bridge session
+                session_repo = BridgeSessionRepository(db_session)
+                session = await session_repo.create(
+                    user_id=user.id,
+                    direction=direction,
+                    token=data.get("token", "CELL"),
+                    amount=data.get("amount", "0"),
+                    src_address=data.get("src_address", ""),
+                    dst_address=data.get("dst_address", ""),
+                    src_network=get_chain_name(src),
+                    dst_network=get_chain_name(dst),
+                )
+                
+                await db_session.commit()
+                
+                session_id = session.session_id
+                
+                logger.info(f"Created bridge session {session_id} for user {callback.from_user.id}")
+                
+        except Exception as e:
+            logger.error(f"Failed to create bridge session: {e}", exc_info=True)
+            await callback.message.edit_text(
+                "❌ <b>Error creating session</b>\n\n"
+                "Please try again later or contact support."
+            )
+            await callback.answer("Error!")
+            await state.clear()
+            return
         
         await state.clear()
         
-        direction = data.get("direction", "")
-        _, dst = parse_direction(direction)
-        
         success_text = (
             "✅ <b>Bridge Session Created!</b>\n\n"
-            f"Session ID: <code>{session.session_id}</code>\n\n"
+            f"Session ID: <code>{session_id}</code>\n\n"
             f"<b>Next Steps:</b>\n"
             f"1. Open the official bridge at bridge.cellframe.net\n"
             f"2. Connect your wallet (MetaMask/Trust Wallet)\n"
@@ -362,7 +600,7 @@ def register_handlers(dp: Router) -> None:
         
         await callback.message.edit_text(
             success_text,
-            reply_markup=action_keyboard(session.session_id),
+            reply_markup=action_keyboard(session_id),
         )
         await callback.answer("✅ Session created!")
 

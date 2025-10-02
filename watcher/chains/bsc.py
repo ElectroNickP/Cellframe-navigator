@@ -5,7 +5,10 @@ import logging
 from typing import Iterable, List, Set
 
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+try:
+    from web3.middleware import ExtraDataToPOAMiddleware as geth_poa_middleware
+except ImportError:
+    from web3.middleware import geth_poa_middleware
 
 from watcher.chains.base import BaseChainWatcher
 from watcher.evm_tracker import EVMTransactionTracker
@@ -56,7 +59,7 @@ class BSCWatcher(BaseChainWatcher):
         events: List[dict] = []
 
         try:
-            current_block = await asyncio.to_thread(self.web3.eth.block_number)
+            current_block = self.web3.eth.block_number
             
             if self._last_block == 0:
                 # First run, only track from current block

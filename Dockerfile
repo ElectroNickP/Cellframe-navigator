@@ -27,7 +27,7 @@ COPY alembic /app/alembic
 COPY bot /app/bot
 COPY watcher /app/watcher
 COPY data /app/data
-COPY queue /app/queue
+COPY tasks /app/tasks
 
 # Default command (can be overridden in docker-compose)
 CMD ["python", "-m", "bot.main"]

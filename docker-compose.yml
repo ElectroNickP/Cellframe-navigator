@@ -99,12 +99,30 @@ services:
   worker:
     build: .
     container_name: cellframe_worker
-    command: python -m queue.worker
+    command: python -m tasks.worker
     env_file:
       - .env
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    networks:
+      - cellframe_network
+
+  # Transaction Monitor Service (sends notifications)
+  tx_monitor:
+    build: .
+    container_name: cellframe_tx_monitor
+    command: python -m watcher.tx_monitor
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      bot:
+        condition: service_started
     volumes:
       - ./:/app
     restart: unless-stopped
