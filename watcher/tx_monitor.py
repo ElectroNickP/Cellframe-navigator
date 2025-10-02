@@ -11,9 +11,11 @@ from typing import Optional
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+import redis.asyncio as redis
 from sqlalchemy import select
 from web3 import Web3
 
+from bot.rate_limiter import get_rate_limiter
 from data.database import get_session_factory
 from data.models import Transaction
 from data.repositories import TransactionRepository
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
 class TransactionMonitor:
     """Monitor pending transactions and send notifications."""
     
-    def __init__(self, bot_token: str, eth_rpc_url: Optional[str] = None, bsc_rpc_url: Optional[str] = None):
+    def __init__(self, bot_token: str, eth_rpc_url: Optional[str] = None, bsc_rpc_url: Optional[str] = None, redis_url: Optional[str] = None):
         """
         Initialize transaction monitor.
         
@@ -34,12 +36,19 @@ class TransactionMonitor:
             bot_token: Telegram bot token
             eth_rpc_url: Ethereum RPC URL
             bsc_rpc_url: BSC RPC URL
+            redis_url: Redis URL for notification deduplication
         """
         self.bot = Bot(
             token=bot_token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
         self.session_factory = get_session_factory()
+        self.rate_limiter = get_rate_limiter()
+        
+        # Initialize Redis for notification deduplication
+        self.redis: Optional[redis.Redis] = None
+        if redis_url:
+            self.redis = redis.from_url(redis_url, decode_responses=True)
         
         # Initialize chain trackers
         self.trackers = {}
@@ -156,6 +165,14 @@ class TransactionMonitor:
                 tx_with_session = result.scalar_one()
                 user_id = tx_with_session.session.user_id
             
+            # Check Redis for deduplication
+            if self.redis:
+                notification_key = f"notified:{tx.hash}:{user_id}:confirmed"
+                already_sent = await self.redis.get(notification_key)
+                if already_sent:
+                    logger.debug(f"Confirmation notification already sent for TX {tx.hash}")
+                    return
+            
             chain_name = "Ethereum" if tx.chain == "ethereum" else "BSC"
             
             message = (
@@ -167,7 +184,17 @@ class TransactionMonitor:
                 f"✨ Your tokens are now safe!"
             )
             
-            await self.bot.send_message(chat_id=user_id, text=message)
+            # Send with rate limiting
+            await self.rate_limiter.send_message_safe(
+                self.bot,
+                user_id,
+                message
+            )
+            
+            # Mark as sent in Redis (expires in 7 days)
+            if self.redis:
+                await self.redis.setex(notification_key, 604800, "1")
+            
             logger.info(f"Sent confirmation notification for TX {tx.hash} to user {user_id}")
         
         except Exception as e:
@@ -209,7 +236,12 @@ class TransactionMonitor:
                 f"⏳ Almost there! {tx.confirmations_required - confirmations} more to go..."
             )
             
-            await self.bot.send_message(chat_id=user_id, text=message)
+            # Send with rate limiting
+            await self.rate_limiter.send_message_safe(
+                self.bot,
+                user_id,
+                message
+            )
             logger.info(f"Sent progress notification for TX {tx.hash} to user {user_id}")
         
         except Exception as e:
@@ -221,6 +253,7 @@ async def main() -> None:
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
     eth_rpc = os.getenv("ETH_RPC_URL")
     bsc_rpc = os.getenv("BSC_RPC_URL")
+    redis_url = os.getenv("REDIS_URL")
     
     if not bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
@@ -229,6 +262,7 @@ async def main() -> None:
         bot_token=bot_token,
         eth_rpc_url=eth_rpc,
         bsc_rpc_url=bsc_rpc,
+        redis_url=redis_url,
     )
     
     try:

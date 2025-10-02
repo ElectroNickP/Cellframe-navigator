@@ -16,7 +16,21 @@ def get_engine():
     global _engine
     if _engine is None:
         config = get_bot_config()
-        _engine = create_async_engine(config.database_url, echo=False, future=True)
+        _engine = create_async_engine(
+            config.database_url,
+            echo=False,
+            future=True,
+            # Production-ready connection pool settings
+            pool_size=20,  # Maximum connections in pool
+            max_overflow=40,  # Extra connections under heavy load
+            pool_pre_ping=True,  # Verify connections before use
+            pool_recycle=3600,  # Recycle connections every hour
+            pool_timeout=30,  # Max wait time for connection
+            connect_args={
+                "server_settings": {"application_name": "cellframe_bot"},
+                "command_timeout": 60,
+            }
+        )
     return _engine
 
 
