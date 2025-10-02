@@ -216,77 +216,120 @@ def register_handlers(dp: Router) -> None:
         
         tx_hash = parts[1].strip()
         
-        # Validate TX hash format
+        # Validate TX hash format and detect chain
+        is_evm = False
+        is_cellframe = False
+        
         if tx_hash.startswith("0x") and len(tx_hash) == 66:
             # Ethereum/BSC format
-            chain = "ethereum"  # Will detect actual chain later
-        elif len(tx_hash) == 64 or len(tx_hash) == 66:
+            is_evm = True
+        elif len(tx_hash) == 64:
             # Could be Cellframe or Ethereum without 0x
+            # Try to detect: Cellframe hashes are usually base58 or hex
             if not tx_hash.startswith("0x"):
-                tx_hash = "0x" + tx_hash
-            chain = "ethereum"
+                # Check if it looks like Cellframe (contains base58 chars)
+                if any(c in tx_hash for c in "ghijklmnopqrstuvwxyzGHIJKLMNOPQRSTUVWXYZ"):
+                    is_cellframe = True
+                else:
+                    # Probably Ethereum without 0x
+                    tx_hash = "0x" + tx_hash
+                    is_evm = True
+            else:
+                is_evm = True
+        elif len(tx_hash) > 40:  # Cellframe TX hashes can be variable length
+            is_cellframe = True
         else:
             await message.answer(
                 "❌ Invalid transaction hash format.\n\n"
                 "Please provide a valid TX hash:\n"
                 "• Ethereum: 0x1234... (66 chars)\n"
                 "• BSC: 0x1234... (66 chars)\n"
-                "• Cellframe: varies"
+                "• Cellframe: base58 string"
             )
             return
         
         await message.answer("🔍 Checking transaction...")
         
         try:
-            # Check if we have ETH RPC configured
+            # Check if we have RPC configured
             eth_rpc = os.getenv("ETH_RPC_URL")
             bsc_rpc = os.getenv("BSC_RPC_URL")
+            cf_rpc = os.getenv("CF_RPC_URL")
             
-            if not eth_rpc and not bsc_rpc:
+            if not eth_rpc and not bsc_rpc and not cf_rpc:
                 await message.answer(
                     "⚠️ <b>RPC not configured</b>\n\n"
                     "Transaction tracking requires blockchain RPC endpoints.\n"
-                    "Please configure ETH_RPC_URL or BSC_RPC_URL."
+                    "Please configure ETH_RPC_URL, BSC_RPC_URL, or CF_RPC_URL."
                 )
                 return
             
-            # Try Ethereum first
+            # Try to find transaction
             tracker = None
             tx_info = None
             detected_chain = None
             
-            if eth_rpc:
+            # If looks like Cellframe, try CF first
+            if is_cellframe and cf_rpc:
                 try:
-                    from web3 import Web3
-                    web3_eth = Web3(Web3.HTTPProvider(eth_rpc))
-                    tracker = EVMTransactionTracker(web3_eth, confirmations_required=12)
-                    tx_info = await tracker.get_transaction_status(tx_hash)
-                    if tx_info and tx_info.get("exists"):
-                        detected_chain = "ethereum"
+                    from watcher.cf20_rpc import CF20RPCClient
+                    cf_network = os.getenv("CF_NETWORK", "Backbone")
+                    cf_client = CF20RPCClient(cf_rpc, cf_network)
+                    
+                    # Check transaction status
+                    tx_status = await cf_client.tx_status(tx_hash)
+                    
+                    if tx_status and tx_status.get("found"):
+                        detected_chain = "cellframe"
+                        tx_info = {
+                            "exists": True,
+                            "confirmed": tx_status.get("status") == "accepted",
+                            "confirmations": tx_status.get("confirmations", 0),
+                            "block_number": tx_status.get("block"),
+                            "from": tx_status.get("source_addr"),
+                            "to": tx_status.get("dest_addr"),
+                            "amount": tx_status.get("value"),
+                        }
+                        logger.info(f"Found TX on Cellframe: {tx_hash}")
                 except Exception as e:
-                    logger.debug(f"Not found on Ethereum: {e}")
+                    logger.debug(f"Not found on Cellframe: {e}")
             
-            # Try BSC if not found on Ethereum
-            if not detected_chain and bsc_rpc:
-                try:
-                    from web3 import Web3
-                    web3_bsc = Web3(Web3.HTTPProvider(bsc_rpc))
-                    tracker = EVMTransactionTracker(web3_bsc, confirmations_required=15)
-                    tx_info = await tracker.get_transaction_status(tx_hash)
-                    if tx_info and tx_info.get("exists"):
-                        detected_chain = "bsc"
-                except Exception as e:
-                    logger.debug(f"Not found on BSC: {e}")
+            # Try EVM chains if not found or looks like EVM
+            if not detected_chain and is_evm:
+                # Try Ethereum first
+                if eth_rpc:
+                    try:
+                        from web3 import Web3
+                        web3_eth = Web3(Web3.HTTPProvider(eth_rpc))
+                        tracker = EVMTransactionTracker(web3_eth, confirmations_required=12)
+                        tx_info = await tracker.get_transaction_status(tx_hash)
+                        if tx_info and tx_info.get("exists"):
+                            detected_chain = "ethereum"
+                    except Exception as e:
+                        logger.debug(f"Not found on Ethereum: {e}")
+                
+                # Try BSC if not found on Ethereum
+                if not detected_chain and bsc_rpc:
+                    try:
+                        from web3 import Web3
+                        web3_bsc = Web3(Web3.HTTPProvider(bsc_rpc))
+                        tracker = EVMTransactionTracker(web3_bsc, confirmations_required=15)
+                        tx_info = await tracker.get_transaction_status(tx_hash)
+                        if tx_info and tx_info.get("exists"):
+                            detected_chain = "bsc"
+                    except Exception as e:
+                        logger.debug(f"Not found on BSC: {e}")
             
             if not detected_chain or not tx_info:
                 await message.answer(
                     "❌ <b>Transaction not found</b>\n\n"
-                    f"TX Hash: <code>{tx_hash}</code>\n\n"
-                    "This transaction was not found on Ethereum or BSC.\n"
+                    f"TX Hash: <code>{tx_hash[:20]}...{tx_hash[-10:]}</code>\n\n"
+                    "This transaction was not found on Ethereum, BSC, or Cellframe.\n"
                     "Please check:\n"
                     "• TX hash is correct\n"
                     "• Transaction has been broadcasted\n"
-                    "• Using the right network"
+                    "• Using the right network\n"
+                    "• RPC endpoint is configured and working"
                 )
                 return
             
@@ -315,58 +358,92 @@ def register_handlers(dp: Router) -> None:
                         dst_network="Cellframe CF-20",
                     )
                 
-                # Add transaction
+                # Add or update transaction
                 tx_repo = TransactionRepository(db_session)
                 existing_tx = await tx_repo.get_by_hash(tx_hash)
                 
                 if not existing_tx:
+                    # Set confirmations_required based on chain
+                    if detected_chain == "ethereum":
+                        conf_required = 12
+                    elif detected_chain == "bsc":
+                        conf_required = 15
+                    else:  # cellframe
+                        conf_required = int(os.getenv("CF_CONFIRMATIONS_REQUIRED", "3"))
+                    
                     tx = await tx_repo.create(
                         session_id=session.id,
                         chain=detected_chain,
                         tx_hash=tx_hash,
-                        confirmations_required=12 if detected_chain == "ethereum" else 15,
+                        confirmations_required=conf_required,
                         from_address=tx_info.get("from"),
                         to_address=tx_info.get("to"),
                     )
-                    
-                    # Update with current status
-                    await tx_repo.update_status(
-                        tx_hash=tx_hash,
-                        confirmations=tx_info.get("confirmations", 0),
-                        block_number=tx_info.get("block_number"),
-                        status="confirmed" if tx_info.get("confirmed") else "pending",
-                    )
-                    
-                    await db_session.commit()
-                    
                     logger.info(f"Started tracking TX {tx_hash} for user {message.from_user.id}")
+                else:
+                    logger.info(f"TX {tx_hash} already tracked, showing current status")
+                
+                # Always update with current status (for both new and existing TX)
+                await tx_repo.update_status(
+                    tx_hash=tx_hash,
+                    confirmations=tx_info.get("confirmations", 0),
+                    block_number=tx_info.get("block_number"),
+                    status="confirmed" if tx_info.get("confirmed") else "pending",
+                )
+                
+                await db_session.commit()
                 
             # Display status
             confirmations = tx_info.get("confirmations", 0)
-            required = 12 if detected_chain == "ethereum" else 15
+            
+            # Set required confirmations based on chain
+            if detected_chain == "ethereum":
+                required = 12
+                chain_name = "Ethereum"
+            elif detected_chain == "bsc":
+                required = 15
+                chain_name = "BSC"
+            else:  # cellframe
+                required = int(os.getenv("CF_CONFIRMATIONS_REQUIRED", "3"))
+                chain_name = "Cellframe"
+            
             confirmed = tx_info.get("confirmed", False)
-            
             status_emoji = "✅" if confirmed else "⏳"
-            chain_name = "Ethereum" if detected_chain == "ethereum" else "BSC"
             
-            status_text = (
-                f"{status_emoji} <b>Transaction Tracked!</b>\n\n"
-                f"<b>Chain:</b> {chain_name}\n"
-                f"<b>TX Hash:</b> <code>{tx_hash[:10]}...{tx_hash[-8:]}</code>\n"
-                f"<b>Status:</b> {'Confirmed ✅' if confirmed else 'Pending ⏳'}\n"
-                f"<b>Confirmations:</b> {confirmations}/{required}\n"
-            )
+            # Check if already tracking
+            already_tracked = existing_tx is not None
             
-            if tx_info.get("block_number"):
-                status_text += f"<b>Block:</b> {tx_info['block_number']}\n"
-            
-            if not confirmed:
+            if confirmed:
+                status_text = (
+                    f"✅ <b>Transaction Confirmed!</b>\n\n"
+                    f"Your transaction on {chain_name} has been confirmed!\n\n"
+                    f"<b>TX Hash:</b> <code>{tx_hash[:10]}...{tx_hash[-8:]}</code>\n"
+                    f"<b>Confirmations:</b> {confirmations}/{required}\n"
+                    f"<b>Block:</b> {tx_info.get('block_number')}\n\n"
+                    f"✨ Your tokens are safe!"
+                )
+                if already_tracked:
+                    status_text += "\n\n<i>Note: This transaction was already tracked.</i>"
+            else:
+                status_text = (
+                    f"{status_emoji} <b>Transaction Tracked!</b>\n\n"
+                    f"<b>Chain:</b> {chain_name}\n"
+                    f"<b>TX Hash:</b> <code>{tx_hash[:10]}...{tx_hash[-8:]}</code>\n"
+                    f"<b>Status:</b> Pending ⏳\n"
+                    f"<b>Confirmations:</b> {confirmations}/{required}\n"
+                )
+                
+                if tx_info.get("block_number"):
+                    status_text += f"<b>Block:</b> {tx_info['block_number']}\n"
+                
                 status_text += (
                     f"\n⏱ <b>Estimated time:</b> ~{(required - confirmations) * 15} seconds\n\n"
-                    f"I'll notify you when this transaction is confirmed!"
                 )
-            else:
-                status_text += "\n✅ This transaction is already confirmed!"
+                
+                if already_tracked:
+                    status_text += "I'm already monitoring this transaction and will notify you when confirmed!"
+                else:
+                    status_text += "I'll notify you when this transaction is confirmed!"
             
             await message.answer(status_text)
             
