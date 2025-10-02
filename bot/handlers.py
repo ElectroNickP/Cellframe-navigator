@@ -20,11 +20,17 @@ from bot.keyboards import (
     parse_direction,
     token_keyboard,
 )
+from bot.status_handler import StatusCommandHandler
 from bot.storage import BindingStorage
+from watcher.cfscan import CFSCANIntegration
 from watcher.validators import validate_address
 
 
 logger = logging.getLogger(__name__)
+
+# Initialize services
+status_handler = StatusCommandHandler()
+cfscan = CFSCANIntegration()
 
 
 class BridgeFlow(StatesGroup):
@@ -90,43 +96,15 @@ def register_handlers(dp: Router) -> None:
 
     @router.message(Command("status"))
     async def cmd_status(message: types.Message) -> None:
-        """Check transaction status."""
+        """Check transaction status with smart diagnostics."""
         # Parse tx hash if provided
         parts = message.text.split(maxsplit=1)
         if len(parts) > 1:
             tx_hash = parts[1].strip()
-            await message.answer(
-                f"🔍 Checking status for transaction:\n"
-                f"<code>{tx_hash}</code>\n\n"
-                f"<i>Feature coming soon: Smart transaction diagnostics</i>"
-            )
+            await status_handler.handle_status_command(message, tx_hash)
         else:
             # Show user's sessions
-            sessions = binding_storage.list_sessions(message.from_user.id)
-            if not sessions:
-                await message.answer(
-                    "You don't have any bridge sessions yet.\n"
-                    "Use /bridge to create one!"
-                )
-                return
-
-            response = "📊 <b>Your Bridge Sessions:</b>\n\n"
-            for session in sessions[-5:]:  # Show last 5
-                status_emoji = {
-                    "pending": "⏳",
-                    "processing": "🔄",
-                    "completed": "✅",
-                    "failed": "❌",
-                }.get(session.status, "❓")
-                
-                response += (
-                    f"{status_emoji} <code>{session.session_id[:16]}...</code>\n"
-                    f"   {session.direction.replace('_', ' → ').upper()} • "
-                    f"{session.token} {session.amount}\n"
-                    f"   Status: {session.status}\n\n"
-                )
-            
-            await message.answer(response)
+            await status_handler.handle_status_command(message)
 
     @router.message(Command("fees"))
     async def cmd_fees(message: types.Message) -> None:
@@ -361,6 +339,9 @@ def register_handlers(dp: Router) -> None:
         
         await state.clear()
         
+        direction = data.get("direction", "")
+        _, dst = parse_direction(direction)
+        
         success_text = (
             "✅ <b>Bridge Session Created!</b>\n\n"
             f"Session ID: <code>{session.session_id}</code>\n\n"
@@ -369,8 +350,15 @@ def register_handlers(dp: Router) -> None:
             f"2. Connect your wallet (MetaMask/Trust Wallet)\n"
             f"3. Complete the transaction\n\n"
             f"We'll monitor your transaction and notify you of updates!\n\n"
-            f"<i>Use /status to check progress anytime.</i>"
+            f"<i>Use /status to check progress anytime.</i>\n"
         )
+        
+        # Add CFSCAN link if destination is CF-20
+        if dst == "cf":
+            dst_addr = data.get("dst_address", "")
+            if dst_addr:
+                cfscan_link = cfscan.format_address_link(dst_addr, "View on CFSCAN")
+                success_text += f"\n📊 Destination address: {cfscan_link}"
         
         await callback.message.edit_text(
             success_text,

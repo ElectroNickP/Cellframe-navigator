@@ -11,14 +11,20 @@ A comprehensive Telegram bot and watcher service that provides real-time transac
 - ✅ **Address Validation** - Real-time validation for ERC-20/BEP-20/CF-20 addresses
 - ✅ **Fee Estimation** - Accurate fee calculations and time estimates
 - ✅ **Transaction Tracking** - Monitor confirmations on both source and destination chains
+- ✅ **Smart Diagnostics** - Automatic issue detection with actionable suggestions
+- ✅ **Push Notifications** - Real-time updates on transaction status
 - ✅ **Multi-Chain Support** - Ethereum, BSC, and Cellframe CF-20
 - ✅ **Session Management** - Track multiple bridge sessions simultaneously
+- ✅ **CFSCAN Integration** - Direct links to blockchain explorer
 
 ### For Developers
 - ✅ **Production-Ready Architecture** - Microservices with health checks and graceful shutdown
 - ✅ **Database Migrations** - Alembic for schema versioning
 - ✅ **Real Blockchain Integration** - Live CF-20 RPC client with TX_HISTORY, MEMPOOL, TOKEN_INFO
 - ✅ **EVM Transaction Tracker** - Confirmation counting for Ethereum and BSC
+- ✅ **Smart Diagnostics Engine** - Automatic transaction analysis and issue detection
+- ✅ **Notification System** - Push notifications with retry logic and backoff
+- ✅ **CFSCAN API Client** - Full integration with blockchain explorer
 - ✅ **Queue System** - Redis RQ for reliable event processing
 - ✅ **Docker Compose** - Full stack orchestration
 
@@ -194,15 +200,21 @@ python -m queue.worker  # Terminal 3
 - **Alembic** - Database migrations
 - **Docker** - Containerization
 
-## 📝 What's Next
+## 📝 What's Implemented
+
+Recently added:
+- [x] **Smart diagnostics** in `/status` command
+- [x] **Push notification service** for transaction updates
+- [x] **CFSCAN integration** for public verification
+- [x] **Transaction diagnostics** with actionable suggestions
+- [x] **Progress tracking** with visual progress bars
+- [x] **Error detection** with troubleshooting steps
 
 Coming soon:
-- [ ] Smart diagnostics in `/status` command
-- [ ] Push notifications for transaction updates
-- [ ] CFSCAN integration for public verification
 - [ ] Multi-language support (EN/RU/TH)
-- [ ] Web dashboard for support team
+- [ ] Web dashboard for support team  
 - [ ] Transaction history export
+- [ ] Advanced analytics dashboard
 
 ## 🔒 Security
 
